@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AAVideoScreensaver" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">#38E0B2</item>
+        <item name="colorSecondary">#3B82F6</item>
+        <item name="android:statusBarColor">#090C12</item>
+        <item name="android:navigationBarColor">#090C12</item>
+    </style>
+</resources>

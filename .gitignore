@@ -1,0 +1,24 @@
+# Gradle / Android build
+.gradle/
+build/
+app/build/
+.kotlin/
+*.apk
+*.aab
+
+# Configurazione della macchina locale (sdk.dir, percorsi degli strumenti, dispositivi di test)
+local.properties
+install_aa.local.sh
+CLAUDE.local.md
+
+# Log e catture del telefono: restano fuori dal repository
+*.log
+logcat*.txt
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Worktree di lavoro
+.claude/worktrees/
