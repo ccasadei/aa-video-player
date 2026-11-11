@@ -11,7 +11,8 @@ import androidx.car.app.model.Row
 import androidx.car.app.model.SearchTemplate
 import androidx.car.app.model.Template
 import androidx.lifecycle.lifecycleScope
-import com.casadei.aavideoscreensaver.extractor.StreamedPkClient
+import com.casadei.aavideoscreensaver.extractor.PitsportClient
+import com.casadei.aavideoscreensaver.extractor.PpvClient
 import com.casadei.aavideoscreensaver.extractor.StreamingCommunityCatalogClient
 import com.casadei.aavideoscreensaver.extractor.YouTubeStreamExtractor
 import com.casadei.aavideoscreensaver.model.PlayerUiState
@@ -39,7 +40,7 @@ import org.json.JSONException
  *   1 VideoSurfaceScreen (NavigationTemplate, azzera la quota)
  *   2 CarBrowseHubScreen (ListTemplate statico)
  *   3 Browser del provider (SearchTemplate: sottomenu, pagine, ricerca, modalità elimina = refresh)
- *   4 Solo: episodi di una serie (SearchTemplate) e sorgenti di un evento Streamed.pk (ListTemplate senza pagine)
+ *   4 Solo: episodi di una serie (SearchTemplate), sorgenti PPV (ListTemplate), sorgenti Pitsport (ListTemplate)
  * Scegliere un contenuto avvia la riproduzione e torna alla radice (popToRoot).
  */
 
@@ -330,10 +331,18 @@ class CarBrowseHubScreen(carContext: CarContext) : Screen(carContext) {
             )
             .addItem(
                 Row.Builder()
-                    .setTitle("⚽ Streamed.pk")
-                    .addText("Dirette sportive ed eventi live")
+                    .setTitle("📺 PPV Sport")
+                    .addText("MMA, Wrestling, F1, MotoGP e eventi live")
                     .setBrowsable(true)
-                    .setOnClickListener { pushIfOnTop(StreamedPkBrowserScreen(carContext)) }
+                    .setOnClickListener { pushIfOnTop(PpvBrowserScreen(carContext)) }
+                    .build()
+            )
+            .addItem(
+                Row.Builder()
+                    .setTitle("⚽ Pitsport Live")
+                    .addText("Calcio, F1, MotoGP, NBA, NFL, WWE e sport live")
+                    .setBrowsable(true)
+                    .setOnClickListener { pushIfOnTop(PitsportBrowserScreen(carContext)) }
                     .build()
             )
             .build()
@@ -506,7 +515,7 @@ class StreamingCommunitySeriesScreen(
     ): List<BrowserRow> {
         val progressMap = ScreensaverRepository.loadAllSavedProgress(carContext)
         return episodes.map { ep ->
-            val url = StreamingCommunityCatalogClient.buildSeriesEpisodeVixUrl(d.imdbId, ep.season, ep.episode)
+            val url = StreamingCommunityCatalogClient.buildSeriesEpisodeUrl(d, ep)
             val prog = progressMap[ScreensaverRepository.normalizeProgressKey(url)]
             val hint = if (prog != null && prog.positionMs > 5_000L && prog.durationMs > 0L) {
                 "⏱️ Riprendi da ${PlayerUiState.formatTimeMs(prog.positionMs)} / ${PlayerUiState.formatTimeMs(prog.durationMs)}"
@@ -521,11 +530,11 @@ class StreamingCommunitySeriesScreen(
 }
 
 // ============================================================================
-// STREAMED.PK (livello 3, sorgenti -> livello 4)
+// PPV (livello 3, live/VOD/categorie -> livello 4 sorgenti)
 // ============================================================================
 
-class StreamedPkBrowserScreen(carContext: CarContext) :
-    CarBrowserScreen(carContext, "Cerca squadra, evento o sport...") {
+class PpvBrowserScreen(carContext: CarContext) :
+    CarBrowserScreen(carContext, "Cerca evento, sport o categoria PPV...") {
 
     override val rootEmptyMessage = "Usa il microfono 🎤 o la tastiera per cercare"
 
@@ -535,77 +544,79 @@ class StreamedPkBrowserScreen(carContext: CarContext) :
 
     override suspend fun loadRoot(): Result<List<BrowserRow>> = Result.success(
         listOf(
-            BrowserRow("🔴 In diretta ora", "Eventi live in questo momento", browsable = true) {
-                showView("In diretta ora", "Nessun evento live in questo momento") {
-                    matchRows(StreamedPkClient.fetchLiveMatches())
+            BrowserRow("🔴 Dirette live", "Canali 24/7 ed eventi in diretta ora", browsable = true) {
+                showView("Dirette live", "Nessuna diretta live al momento") {
+                    streamRows(PpvClient.fetchLiveStreams())
                 }
             },
-            BrowserRow("🔥 Live popolari", "Gli eventi più seguiti", browsable = true) {
-                showView("Live popolari", "Nessun evento popolare live") {
-                    matchRows(StreamedPkClient.fetchPopularLiveMatches())
+            BrowserRow("📅 Eventi in programma", "Partite e show in arrivo", browsable = true) {
+                showView("In programma", "Nessun evento in programma") {
+                    streamRows(PpvClient.fetchUpcomingStreams())
                 }
             },
-            BrowserRow("📅 Eventi di oggi", "Calendario completo di oggi", browsable = true) {
-                showView("Eventi di oggi", "Nessun evento oggi") {
-                    matchRows(StreamedPkClient.fetchAllTodayMatches())
+            BrowserRow("📺 VOD disponibili", "Eventi registrati e replay", browsable = true) {
+                showView("VOD", "Nessun VOD disponibile") {
+                    streamRows(PpvClient.fetchVodStreams())
                 }
             },
-            BrowserRow("🏆 Per sport", "Calcio, motori, tennis, basket...", browsable = true) {
-                showView("Per sport", "Nessuna categoria disponibile") { categoryRows() }
+            BrowserRow("🏆 Per categoria", "NFL, NBA, Calcio, Wrestling, 24/7...", browsable = true) {
+                showView("Categorie", "Nessuna categoria disponibile") { categoryRows() }
             }
         )
     )
 
     override fun onSearch(query: String) {
         showView("🔍 $query", "Nessun evento trovato per '$query'", isSearch = true) {
-            matchRows(StreamedPkClient.searchMatches(query))
+            streamRows(PpvClient.searchStreams(query))
         }
     }
 
     private suspend fun categoryRows(): Result<List<BrowserRow>> =
-        StreamedPkClient.fetchSportsCategories().map { cats ->
+        PpvClient.fetchCategories().map { cats ->
             cats.map { cat ->
-                BrowserRow("${cat.emoji} ${cat.name}", "Eventi live e in programma", browsable = true) {
+                BrowserRow(cat.name, "Eventi live e in programma", browsable = true) {
                     showView(cat.name, "Nessun evento per ${cat.name}") {
-                        matchRows(StreamedPkClient.fetchMatchesBySport(cat.id))
+                        streamRows(PpvClient.fetchStreamsByCategory(cat.id))
                     }
                 }
             }
         }
 
-    private fun matchRows(res: Result<List<StreamedPkClient.StreamedMatch>>): Result<List<BrowserRow>> =
-        res.map { matches ->
-            matches.map { match ->
-                val pop = if (match.popular) "🔥 " else ""
+    private fun streamRows(res: Result<List<PpvClient.PpvStream>>): Result<List<BrowserRow>> =
+        res.map { streams ->
+            streams.map { stream ->
+                val viewers = if (stream.viewers > 0) " • 👥 ${stream.viewers}" else ""
+                val liveBadge = if (stream.isLiveNow) "🔴 " else if (stream.isVod) "📺 " else "⏳ "
+                val totalSources = 1 + stream.substreams.size
+                val subCount = if (!stream.isVod && totalSources > 1) " ($totalSources fonti)" else ""
                 BrowserRow(
-                    "${match.categoryEmoji} $pop${match.title}",
-                    "${match.formattedTime} • ${match.sources.size} sorgenti",
+                    "$liveBadge${stream.name}",
+                    "${stream.formattedStatus} • ${stream.categoryLabel}$viewers$subCount",
                     browsable = true
                 ) {
-                    pushIfOnTop(StreamedPkStreamOptionsCarScreen(carContext, match))
+                    pushIfOnTop(PpvStreamOptionsCarScreen(carContext, stream))
                 }
             }
         }
 }
 
 /**
- * Sorgenti di un evento (livello 4). ListTemplate senza paginazione: il passaggio caricamento -> lista è un
- * refresh; una pagina successiva sarebbe un quinto template non ammesso. Le sorgenti sono ordinate per qualità
- * e il resolver prova comunque le alternative dello stesso evento.
+ * Sorgenti di un evento PPV (livello 4). ListTemplate senza paginazione: il passaggio caricamento -> lista è un
+ * refresh; una pagina successiva sarebbe un quinto template non ammesso.
  */
-class StreamedPkStreamOptionsCarScreen(
+class PpvStreamOptionsCarScreen(
     carContext: CarContext,
-    private val match: StreamedPkClient.StreamedMatch
+    private val stream: PpvClient.PpvStream
 ) : Screen(carContext) {
 
     private var isLoading = true
-    private var streams: List<StreamedPkClient.StreamOption> = emptyList()
+    private var embedUrl: String? = null
     private var errorMsg: String? = null
 
     init {
         lifecycleScope.launch {
-            val res = loadSafely { StreamedPkClient.fetchStreamsForMatch(match) }
-            streams = res.getOrDefault(emptyList())
+            val res = loadSafely { PpvClient.fetchStreamPlayUrl(stream) }
+            embedUrl = res.getOrNull()
             errorMsg = res.exceptionOrNull()?.let { friendlyError(it, "Errore caricamento sorgenti") }
             isLoading = false
             invalidate()
@@ -614,25 +625,165 @@ class StreamedPkStreamOptionsCarScreen(
 
     override fun onGetTemplate(): Template {
         val builder = ListTemplate.Builder()
-            .setTitle("📡 ${match.title}")
+            .setTitle("📡 ${stream.name}")
             .setHeaderAction(Action.BACK)
         if (isLoading) return builder.setLoading(true).build()
 
+        val allOptions = mutableListOf<Pair<String, String>>() // (title, url)
+        if (embedUrl != null) {
+            val mainLabel = if (stream.sourceTag.isNotBlank() && !stream.isVod) {
+                "${stream.name} [${stream.sourceTag}]"
+            } else {
+                stream.name
+            }
+            allOptions.add(mainLabel to embedUrl!!)
+        }
+        for (sub in stream.substreams) {
+            allOptions.add("${stream.name} [${sub.name}]" to sub.embedUrl)
+        }
+
         val list = ItemList.Builder()
             .setNoItemsMessage(errorMsg ?: "Nessun flusso attivo per questo evento al momento")
+        allOptions.take(CarListLimits.maxRows(carContext)).forEach { (title, url) ->
+            list.addItem(
+                Row.Builder()
+                    .setTitle(title)
+                    .addText(if (stream.isVod) "Tocca per avviare il replay VOD" else "Tocca per avviare (${stream.formattedStatus})")
+                    .setOnClickListener {
+                        CarToast.makeText(carContext, "Avvio: ${stream.name}", CarToast.LENGTH_SHORT).show()
+                        VideoPlayerController.playOrAddCatalogItem(
+                            context = carContext,
+                            title = title,
+                            uriOrUrl = url,
+                            sourceType = SourceType.PPV
+                        )
+                        screenManager.popToRoot()
+                    }
+                    .build()
+            )
+        }
+        return builder.setSingleList(list.build()).build()
+    }
+}
+
+// ============================================================================
+// PITSPORT (livello 3, live/oggi/competizioni -> livello 4 sorgenti)
+// ============================================================================
+
+class PitsportBrowserScreen(carContext: CarContext) :
+    CarBrowserScreen(carContext, "Cerca squadra, evento o sport Pitsport...") {
+
+    override val rootEmptyMessage = "Usa il microfono 🎤 o la tastiera per cercare"
+
+    init {
+        start()
+    }
+
+    override suspend fun loadRoot(): Result<List<BrowserRow>> = Result.success(
+        listOf(
+            BrowserRow("🔴 Dirette ed eventi", "Eventi live e prossimi incontri", browsable = true) {
+                showView("Dirette ed eventi", "Nessun evento disponibile in questo momento") {
+                    programRows(PitsportClient.fetchLiveNow())
+                }
+            },
+            BrowserRow("📅 Home / Calendario", "Eventi in primo piano", browsable = true) {
+                showView("Home", "Nessun evento in primo piano") {
+                    programRows(PitsportClient.fetchHome())
+                }
+            },
+            BrowserRow("🏆 Competizioni", "F1, MotoGP, NBA, NFL, Calcio, Wrestling...", browsable = true) {
+                showView("Competizioni", "Nessuna competizione disponibile") {
+                    competitionRows()
+                }
+            }
+        )
+    )
+
+    override fun onSearch(query: String) {
+        showView("🔍 $query", "Nessun evento trovato per '$query'", isSearch = true) {
+            programRows(PitsportClient.searchPrograms(query))
+        }
+    }
+
+    private suspend fun competitionRows(): Result<List<BrowserRow>> =
+        PitsportClient.fetchCompetitions().map { comps ->
+            comps.map { comp ->
+                BrowserRow("${comp.emoji} ${comp.name}", "Eventi live e in programma", browsable = true) {
+                    showView(comp.name, "Nessun evento in programma per ${comp.name}") {
+                        programRows(PitsportClient.fetchProgramsByCompetition(comp.id))
+                    }
+                }
+            }
+        }
+
+    private fun programRows(res: Result<List<PitsportClient.LiveProgram>>): Result<List<BrowserRow>> =
+        res.map { programs ->
+            programs.map { prog ->
+                val subtitle = "${prog.formattedTime} • ${prog.categoryEmoji} ${prog.category}"
+                BrowserRow(
+                    "${prog.categoryEmoji} ${prog.title}",
+                    subtitle,
+                    browsable = true
+                ) {
+                    pushIfOnTop(PitsportStreamOptionsCarScreen(carContext, prog))
+                }
+            }
+        }
+}
+
+/**
+ * Sorgenti di un evento Pitsport (livello 4). ListTemplate senza paginazione.
+ */
+class PitsportStreamOptionsCarScreen(
+    carContext: CarContext,
+    private val program: PitsportClient.LiveProgram
+) : Screen(carContext) {
+
+    private var isLoading = true
+    private var fetchedProgram: PitsportClient.LiveProgram? = null
+    private var streams: List<PitsportClient.StreamOption> = emptyList()
+    private var errorMsg: String? = null
+
+    init {
+        lifecycleScope.launch {
+            val res = loadSafely { PitsportClient.fetchProgramById(program.id) }
+            val fetched = res.getOrNull()
+            fetchedProgram = fetched
+            streams = fetched?.streams?.takeIf { it.isNotEmpty() } ?: program.streams
+            errorMsg = res.exceptionOrNull()?.let { friendlyError(it, "Errore caricamento sorgenti") }
+            isLoading = false
+            invalidate()
+        }
+    }
+
+    override fun onGetTemplate(): Template {
+        val effProg = fetchedProgram ?: program
+        val builder = ListTemplate.Builder()
+            .setTitle("📡 ${effProg.title}")
+            .setHeaderAction(Action.BACK)
+        if (isLoading) return builder.setLoading(true).build()
+
+        val defaultNoItemsMsg = if (!effProg.live && effProg.startsAt > 0L) {
+            "${effProg.formattedTime} — Il flusso sarà attivo all'inizio dell'evento"
+        } else {
+            "Nessun flusso attivo per questo evento al momento"
+        }
+
+        val list = ItemList.Builder()
+            .setNoItemsMessage(errorMsg ?: defaultNoItemsMsg)
         streams.take(CarListLimits.maxRows(carContext)).forEach { opt ->
             list.addItem(
                 Row.Builder()
                     .setTitle(opt.label)
                     .addText("Tocca per avviare la diretta")
                     .setOnClickListener {
-                        val title = "⚽ ${match.title} (${opt.source.uppercase()} #${opt.streamNo})"
-                        CarToast.makeText(carContext, "Avvio diretta: ${match.title}", CarToast.LENGTH_SHORT).show()
+                        val title = "⚽ ${effProg.title} (${opt.name})"
+                        CarToast.makeText(carContext, "Avvio diretta: ${effProg.title}", CarToast.LENGTH_SHORT).show()
                         VideoPlayerController.playOrAddCatalogItem(
                             context = carContext,
                             title = title,
                             uriOrUrl = opt.embedUrl,
-                            sourceType = SourceType.STREAMED_PK
+                            sourceType = SourceType.PITSPORT
                         )
                         screenManager.popToRoot()
                     }

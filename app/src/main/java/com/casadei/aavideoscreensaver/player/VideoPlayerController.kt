@@ -29,7 +29,9 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import com.casadei.aavideoscreensaver.extractor.StreamedPkClient
+import com.casadei.aavideoscreensaver.extractor.CloudflareWebViewBridge
+import com.casadei.aavideoscreensaver.extractor.PitsportClient
+import com.casadei.aavideoscreensaver.extractor.PpvClient
 import com.casadei.aavideoscreensaver.extractor.StreamingCommunityExtractor
 import com.casadei.aavideoscreensaver.extractor.YouTubeStrategy
 import com.casadei.aavideoscreensaver.extractor.YouTubeStreamExtractor
@@ -142,6 +144,7 @@ object VideoPlayerController {
     fun ensureInitialized(context: Context) {
         runOnMain {
             val ctx = context.applicationContext
+            CloudflareWebViewBridge.init(ctx)
             if (appContext == null) {
                 appContext = ctx
                 val playlist = ScreensaverRepository.loadPlaylist(ctx)
@@ -1158,12 +1161,14 @@ object VideoPlayerController {
             val ctx = context.applicationContext
             val isYt = YouTubeStreamExtractor.isYouTubeUrl(extractedUrl)
             val isSc = StreamingCommunityExtractor.isStreamingCommunityOrVixUrl(extractedUrl)
-            val isSpk = StreamedPkClient.isStreamedPkUrl(extractedUrl)
+            val isPpv = PpvClient.isPpvUrl(extractedUrl)
+            val isPitsport = PitsportClient.isPitsportUrl(extractedUrl)
 
             val sourceType = when {
                 isYt -> SourceType.YOUTUBE
                 isSc -> SourceType.STREAMING_COMMUNITY
-                isSpk -> SourceType.STREAMED_PK
+                isPpv -> SourceType.PPV
+                isPitsport -> SourceType.PITSPORT
                 else -> SourceType.DIRECT_STREAM
             }
 
@@ -1177,9 +1182,13 @@ object VideoPlayerController {
                     val seg = runCatching { Uri.parse(extractedUrl).lastPathSegment }.getOrNull() ?: "Film/Serie"
                     "🍿 StreamingCommunity ($seg)"
                 }
-                isSpk -> {
+                isPpv -> {
                     val seg = runCatching { Uri.parse(extractedUrl).lastPathSegment }.getOrNull() ?: "Live"
-                    "⚽ Streamed.pk ($seg)"
+                    "📺 PPV ($seg)"
+                }
+                isPitsport -> {
+                    val seg = runCatching { Uri.parse(extractedUrl).lastPathSegment }.getOrNull() ?: "Live"
+                    "⚽ Pitsport ($seg)"
                 }
                 extractedUrl.contains(".m3u8", ignoreCase = true) -> {
                     val host = runCatching { Uri.parse(extractedUrl).host }.getOrNull() ?: "HLS"
@@ -1479,29 +1488,27 @@ object VideoPlayerController {
             return
         }
 
-        // Caso 2B: Pagina / Embed Streamed.pk non ancora risolta in .m3u8 diretto
-        if ((item.sourceType == SourceType.STREAMED_PK || StreamedPkClient.isStreamedPkUrl(item.uriOrUrl)) &&
-            !isDirectM3u8OrPlaylist
+        // Caso 2B: Pagina / Embed PPV non ancora risolta in .m3u8 diretto (o .m3u8 privo di header Referer/Origin)
+        if ((item.sourceType == SourceType.PPV || PpvClient.isPpvUrl(item.uriOrUrl)) &&
+            (!isDirectM3u8OrPlaylist || item.httpHeaders.isEmpty())
         ) {
             resolveJob = scope.launch {
                 _uiState.update {
                     it.copy(
                         isBuffering = true,
                         errorMessage = null,
-                        statusMessage = "⏳ Estrazione live Streamed.pk: ${item.title}..."
+                        statusMessage = "⏳ Estrazione live PPV: ${item.title}..."
                     )
                 }
-                val result = StreamedPkClient.resolveStream(ctx, item.uriOrUrl, item.title)
+                val result = PpvClient.resolveStream(ctx, item.uriOrUrl, item.title)
                 result.onSuccess { resolved ->
-                    // L'elemento della playlist resta quello scelto dall'utente (titolo e URL invariati):
-                    // la sorgente alternativa usata vale solo per questa riproduzione.
                     val updatedTitle = item.title
 
                     _uiState.update {
                         it.copy(
                             resolvedTitle = "$updatedTitle [HLS Live]",
                             errorMessage = null,
-                            statusMessage = "Avvio Live Streamed.pk: $updatedTitle"
+                            statusMessage = "Avvio Live PPV: $updatedTitle"
                         )
                     }
                     if (showOverlay) {
@@ -1514,10 +1521,58 @@ object VideoPlayerController {
                         .setMimeType(MimeTypes.APPLICATION_M3U8)
                         .build()
                     val mediaSource = HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
-                    // Gli stream live di Streamed.pk partono dal punto live
                     startMediaSourceOnPlayer(player, mediaSource, 0L, item.id, 0L)
                 }.onFailure { err ->
-                    val errText = "Errore Streamed.pk: ${err.localizedMessage ?: "Stream non attivo al momento"}"
+                    val errText = "Errore PPV: ${err.localizedMessage ?: "Stream non attivo al momento"}"
+                    _uiState.update {
+                        it.copy(
+                            isBuffering = false,
+                            errorMessage = errText,
+                            statusMessage = "⚠️ $errText"
+                        )
+                    }
+                    triggerOverlayFor5Seconds()
+                }
+            }
+            return
+        }
+
+        // Caso 2C: Pagina / Embed Pitsport non ancora risolta in .m3u8 diretto (o .m3u8 privo di header Referer/Origin)
+        if ((item.sourceType == SourceType.PITSPORT || PitsportClient.isPitsportUrl(item.uriOrUrl)) &&
+            (!isDirectM3u8OrPlaylist || item.httpHeaders.isEmpty())
+        ) {
+            resolveJob = scope.launch {
+                _uiState.update {
+                    it.copy(
+                        isBuffering = true,
+                        errorMessage = null,
+                        statusMessage = "⏳ Estrazione live Pitsport: ${item.title}..."
+                    )
+                }
+                val result = PitsportClient.resolveStream(ctx, item.uriOrUrl, item.title)
+                result.onSuccess { resolved ->
+                    val updatedTitle = item.title
+
+                    _uiState.update {
+                        it.copy(
+                            resolvedTitle = "$updatedTitle [HLS Live]",
+                            errorMessage = null,
+                            statusMessage = "Avvio Live Pitsport: $updatedTitle"
+                        )
+                    }
+                    if (showOverlay) {
+                        triggerOverlayFor5Seconds()
+                    }
+
+                    val dataSourceFactory = buildDataSourceFactory(ctx, resolved.headers)
+                    val mediaItem = MediaItem.Builder()
+                        .setUri(resolved.streamUrl)
+                        .setMimeType(MimeTypes.APPLICATION_M3U8)
+                        .build()
+                    val mediaSource = HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
+                    startMediaSourceOnPlayer(player, mediaSource, 0L, item.id, 0L)
+                }.onFailure { err ->
+                    val errText = "Errore Pitsport: ${err.localizedMessage ?: "Stream non attivo al momento"}"
                     _uiState.update {
                         it.copy(
                             isBuffering = false,
@@ -1548,7 +1603,10 @@ object VideoPlayerController {
             DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(mediaItemBuilder.build())
         }
 
-        val startPos = if (item.sourceType == SourceType.DEMO_STREAM || item.sourceType == SourceType.STREAMED_PK) {
+        val startPos = if (item.sourceType == SourceType.DEMO_STREAM ||
+            item.sourceType == SourceType.PPV ||
+            item.sourceType == SourceType.PITSPORT
+        ) {
             0L
         } else {
             initialResumeMs

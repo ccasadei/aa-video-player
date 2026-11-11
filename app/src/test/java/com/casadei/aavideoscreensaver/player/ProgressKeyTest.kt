@@ -60,4 +60,24 @@ class ProgressKeyTest {
             key("https://lb4.strmd.st/secure/abc/hotel/stream/x/1/playlist.m3u8?token=zzz")
         )
     }
+
+    @Test
+    fun `watch URL di StreamingCommunity mantiene la stessa chiave anche se cambia dominio`() {
+        assertEquals(
+            "sc_watch_12264_e90021",
+            key("https://streamingcommunityz.nexus/it/watch/12264?e=90021")
+        )
+        assertEquals(
+            "sc_watch_12264_e90021",
+            key("https://streamingcommunity.foo/it/watch/12264?e=90021")
+        )
+        assertEquals(
+            "sc_watch_12264_e90021",
+            key("https://streamingunity.dog/it/watch/12264?e=90021")
+        )
+        assertEquals(
+            "sc_watch_66558",
+            key("https://streamingcommunityz.nexus/it/watch/66558")
+        )
+    }
 }

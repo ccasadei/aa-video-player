@@ -4,10 +4,13 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import okhttp3.Dns
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.Inet4Address
+import java.net.InetAddress
 import org.json.JSONArray
 import org.json.JSONObject
 import org.schabi.newpipe.extractor.NewPipe
@@ -80,8 +83,22 @@ object YouTubeStreamExtractor {
     @Volatile
     private var initialized = false
 
+    /**
+     * Risolve i domini preferendo gli indirizzi IPv4 (`Inet4Address`) rispetto a IPv6:
+     * su diverse reti mobili/VPN gli indirizzi IPv6 verso Cloudflare (`streamingcommunityz.*`,
+     * `streamingunity.*`, `vixcloud.*`) vengono bloccati con HTTP 403, mentre in IPv4 rispondono HTTP 200.
+     */
+    val ipv4PreferringDns: Dns = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            return Dns.SYSTEM.lookup(hostname).sortedBy { addr ->
+                if (addr is Inet4Address) 0 else 1
+            }
+        }
+    }
+
     val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            .dns(ipv4PreferringDns)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .followRedirects(true)
