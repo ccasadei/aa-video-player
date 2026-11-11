@@ -43,7 +43,9 @@ object ErrorRecoveryPolicy {
         attempts: Attempts,
         surfaceError: Boolean = false
     ): Action {
-        val isStreamed = sourceType == SourceType.STREAMED_PK
+        val isStreamed = sourceType == SourceType.STREAMED_PK ||
+            sourceType == SourceType.PPV ||
+            sourceType == SourceType.PITSPORT
         val canReresolve = attempts.httpRetries < maxHttpRetries(sourceType)
         if (surfaceError) {
             // Superficie dell'auto distrutta o sostituita: non è un problema del contenuto

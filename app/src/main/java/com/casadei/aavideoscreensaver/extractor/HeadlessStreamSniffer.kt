@@ -33,7 +33,7 @@ import java.util.regex.Pattern
 object HeadlessStreamSniffer {
 
     private const val TAG = "AAVideo"
-    private const val DESKTOP_USER_AGENT =
+    internal const val DESKTOP_USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     private val BLOCKED_AD_DOMAINS = listOf(
@@ -55,6 +55,11 @@ object HeadlessStreamSniffer {
         "llvpn.com",
         "optimserve.agency",
         "histats.com",
+        "spbgc.com",
+        "wpnxiswpuyrfn.icu",
+        "vbcojhroxkoaf.online",
+        "suv4.js",
+        "kl1mnopq.js",
         "t48s7z.js",
         "/ad.html"
     )
@@ -117,6 +122,7 @@ object HeadlessStreamSniffer {
             cookieManager.setAcceptCookie(true)
             cookieManager.setAcceptThirdPartyCookies(wv, true)
 
+            val cleanUa = CloudflareWebViewBridge.getCleanUserAgent(appCtx)
             wv.settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -125,7 +131,7 @@ object HeadlessStreamSniffer {
                 javaScriptCanOpenWindowsAutomatically = false
                 setSupportMultipleWindows(true)
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                userAgentString = DESKTOP_USER_AGENT
+                userAgentString = cleanUa
                 cacheMode = WebSettings.LOAD_DEFAULT
             }
 
@@ -159,7 +165,7 @@ object HeadlessStreamSniffer {
                 }.getOrNull()
 
                 val headers = mutableMapOf(
-                    "User-Agent" to DESKTOP_USER_AGENT,
+                    "User-Agent" to cleanUa,
                     "Referer" to effectiveRef,
                     "Sec-Fetch-Dest" to "empty",
                     "Sec-Fetch-Mode" to "cors",
@@ -224,8 +230,25 @@ object HeadlessStreamSniffer {
                         if (scriptText.isNullOrBlank()) return
                         val parsed = parseVixCloudScript(scriptText)
                         if (parsed != null) {
+                            val embedUri = runCatching { Uri.parse(pageUrl ?: targetUrl) }.getOrNull()
+                            val ref = if (embedUri?.scheme != null && embedUri.host != null) {
+                                "${embedUri.scheme}://${embedUri.host}/"
+                            } else {
+                                "https://vixcloud.cc/"
+                            }
                             mainHandler.post {
-                                completeWithUrl(parsed, customReferer = pageUrl ?: targetUrl)
+                                completeWithUrl(parsed, customReferer = ref)
+                            }
+                        }
+                    }
+
+                    @JavascriptInterface
+                    fun onNavigateToEmbed(embedUrl: String?) {
+                        if (embedUrl.isNullOrBlank() || deferred.isCompleted) return
+                        mainHandler.post {
+                            if (!deferred.isCompleted && webView?.url != embedUrl) {
+                                Log.d(TAG, "HeadlessStreamSniffer navigating to inner embed: $embedUrl")
+                                webView?.loadUrl(embedUrl, mapOf("Referer" to targetUrl))
                             }
                         }
                     }
@@ -268,6 +291,18 @@ object HeadlessStreamSniffer {
                         mainHandler.post {
                             completeWithUrl(reqUrl, reqHeaders = reqHeaders)
                         }
+                    } else if (!request.isForMainFrame &&
+                        (reqUrl.contains("vixcloud.", ignoreCase = true) ||
+                            reqUrl.contains("vixsrc.", ignoreCase = true)) &&
+                        reqUrl.contains("/embed/", ignoreCase = true)
+                    ) {
+                        val ref = request.requestHeaders?.get("Referer") ?: targetUrl
+                        mainHandler.post {
+                            if (!deferred.isCompleted && view?.url != reqUrl) {
+                                Log.d(TAG, "HeadlessStreamSniffer navigating top frame to VixCloud embed: $reqUrl")
+                                view?.loadUrl(reqUrl, mapOf("Referer" to ref))
+                            }
+                        }
                     }
                     return super.shouldInterceptRequest(view, request)
                 }
@@ -308,7 +343,7 @@ object HeadlessStreamSniffer {
             } else {
                 val initialHeaders = mapOf(
                     "Referer" to referer,
-                    "User-Agent" to DESKTOP_USER_AGENT
+                    "User-Agent" to cleanUa
                 )
                 wv.loadUrl(targetUrl, initialHeaders)
             }
@@ -345,7 +380,9 @@ object HeadlessStreamSniffer {
         val lower = targetUrl.lowercase()
         if (!lower.contains("embed.st/") &&
             !lower.contains("embedme.top/") &&
-            !lower.contains("rockyembed.")
+            !lower.contains("rockyembed.") &&
+            !lower.contains("taifood-blog.asia/") &&
+            !lower.contains("embdlol.st/")
         ) {
             return null
         }
@@ -404,9 +441,10 @@ object HeadlessStreamSniffer {
                 break
             }
 
-            // Rimuove la parte offuscata AdCash (;function _0x...) lasciando intatte le variabili window[...] iniziali
+            // Rimuove la parte offuscata AdCash (;function _0x... o ;!function(){var e,t,i,r,n={...) lasciando intatte le variabili window[...] iniziali
             val cleaned = rawHtml
                 .replace(Regex(";function\\s+_0x[0-9a-fA-F]+\\([^)]*\\)\\{[\\s\\S]*?</script>"), ";</script>")
+                .replace(Regex(";!function\\(\\)\\{var\\s+e,t,i,r,n=\\{[\\s\\S]*?</script>"), ";</script>")
                 .replace(Regex("<script[^>]*>\\s*aclib\\.runPop[\\s\\S]*?</script>"), "")
                 .replace("/ad.html", "about:blank")
 
@@ -435,25 +473,16 @@ object HeadlessStreamSniffer {
     }
 
     /**
-     * Normalizza gli URL VixCloud / HLS:
-     * - Aggiunge `.m3u8` prima di `?` sui link `vixcloud.co/playlist/<id>?token=...` (richiesto da ExoPlayer).
-     * - Forza `&h=1` (1080p Full HD) sui flussi VixCloud.
+     * Normalizza gli URL VixCloud / HLS forzando `&h=1` (1080p Full HD) sui flussi VixCloud
+     * senza alterare il path `/playlist/<id>` firmato dal token.
      */
     fun normalizeStreamUrl(rawUrl: String): String {
         var url = rawUrl.trim()
-        if (url.contains("vixcloud.", ignoreCase = true) && url.contains("/playlist/", ignoreCase = true)) {
-            val qIdx = url.indexOf('?')
-            if (qIdx > 0) {
-                val basePath = url.substring(0, qIdx)
-                val query = url.substring(qIdx + 1)
-                val fixedPath = if (basePath.endsWith(".m3u8", ignoreCase = true)) basePath else "$basePath.m3u8"
-                url = "$fixedPath?$query"
-            } else if (!url.endsWith(".m3u8", ignoreCase = true)) {
-                url = "$url.m3u8"
-            }
-            if (!url.contains("h=1")) {
-                url = if (url.contains("?")) "$url&h=1" else "$url?h=1"
-            }
+        if ((url.contains("vixcloud.", ignoreCase = true) || url.contains("vixsrc.", ignoreCase = true)) &&
+            url.contains("/playlist/", ignoreCase = true)
+        ) {
+            // Rimuove eventuale .m3u8 aggiunto in precedenza prima di ? così il path coincide con quello firmato dal server
+            url = url.replace(Regex("""(/playlist/\d+)\.m3u8(\?|$)""", RegexOption.IGNORE_CASE), "$1$2")
         }
         return url
     }
@@ -467,8 +496,11 @@ object HeadlessStreamSniffer {
             val token = tokenM.group(1) ?: return null
             val expires = expiresM.group(1) ?: return null
             val serverUrl = urlM.group(1) ?: return null
+            val canPlayFhd = Regex("""canPlayFHD\s*=\s*true""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(scriptContent)
             val sep = if (serverUrl.contains("?")) "&" else "?"
-            val raw = "$serverUrl${sep}token=$token&expires=$expires&h=1"
+            val fhdSuffix = if (canPlayFhd) "&h=1" else ""
+            val raw = "$serverUrl${sep}token=$token&expires=$expires$fhdSuffix"
             return normalizeStreamUrl(raw)
         }
         return null
@@ -513,7 +545,8 @@ object HeadlessStreamSniffer {
                     var p = window.masterPlaylist.params;
                     var u = window.masterPlaylist.url;
                     var sep = u.indexOf('?') !== -1 ? '&' : '?';
-                    var full = u + sep + 'token=' + (p.token || '') + '&expires=' + (p.expires || '') + '&h=1';
+                    var hParam = (window.canPlayFHD === true) ? '&h=1' : '';
+                    var full = u + sep + 'token=' + (p.token || '') + '&expires=' + (p.expires || '') + hParam;
                     window.AAVideoBridge.onStreamDetected(full, window.location.origin);
                     return;
                 }
@@ -531,9 +564,18 @@ object HeadlessStreamSniffer {
                 for (var j = 0; j < iframes.length; j++) {
                     var src = iframes[j].src || iframes[j].getAttribute('src') || '';
                     if (src && (src.indexOf('vixcloud') !== -1 || src.indexOf('vixsrc') !== -1 || src.indexOf('/iframe/') !== -1 || src.indexOf('/embed/') !== -1)) {
+                        if (src.indexOf('vixcloud') !== -1 || src.indexOf('vixsrc') !== -1) {
+                            window.AAVideoBridge.onNavigateToEmbed(src);
+                            return;
+                        }
                         try {
                             var idoc = iframes[j].contentDocument || (iframes[j].contentWindow && iframes[j].contentWindow.document);
                             if (idoc && idoc.documentElement) {
+                                var innerIframe = idoc.querySelector('iframe[src]');
+                                if (innerIframe && innerIframe.src) {
+                                    window.AAVideoBridge.onNavigateToEmbed(innerIframe.src);
+                                    return;
+                                }
                                 var ihtml = idoc.documentElement.innerHTML || '';
                                 if (ihtml.indexOf('/playlist/') !== -1 && ihtml.indexOf('token') !== -1) {
                                     window.AAVideoBridge.onVixScriptDetected(ihtml, src);

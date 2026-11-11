@@ -6,7 +6,9 @@ enum class SourceType(val label: String, val badge: String) {
     DIRECT_STREAM("Stream Rete", "STREAM"),
     YOUTUBE("YouTube", "YOUTUBE"),
     STREAMING_COMMUNITY("StreamingCommunity", "STREAMING COMMUNITY"),
-    STREAMED_PK("Streamed.pk Live", "STREAMED.PK")
+    STREAMED_PK("Streamed.pk Live", "STREAMED.PK"),
+    PPV("PPV Sport", "PPV"),
+    PITSPORT("Pitsport Live", "PITSPORT")
 }
 
 enum class VideoScaleMode(val label: String, val shortLabel: String) {

@@ -137,6 +137,13 @@ object ScreensaverRepository {
                 return "sc_movie_${m.groupValues[1]}"
             }
         }
+        if ((clean.contains("streamingcommunity") || clean.contains("streamingunity")) && clean.contains("/watch/")) {
+            Regex("""/watch/(\d+)(?:.*[?&](?:e|episode_id)=(\d+))?""").find(clean)?.let { m ->
+                val titleId = m.groupValues[1]
+                val epId = m.groupValues[2]
+                return if (epId.isNotBlank()) "sc_watch_${titleId}_e$epId" else "sc_watch_$titleId"
+            }
+        }
         // Normalizza URL YouTube all'ID video (così URL diversi dello stesso video condividono il progresso)
         val isYouTubeHost = clean.contains("youtube.com/") || clean.contains("youtu.be/") ||
             clean.contains("youtube-nocookie.com/")
@@ -280,11 +287,14 @@ object ScreensaverRepository {
     }
 
     fun loadLastStreamingCommunityUrl(context: Context): String {
+        val defaultDomain = com.casadei.aavideoscreensaver.extractor.StreamingCommunityUrlResolver.getCachedOrDefaultBaseUrl()
         val saved = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_LAST_SC_DOMAIN, "https://streaming-community.biz")
-            ?: "https://streaming-community.biz"
-        return if (saved.contains("google.com/search", ignoreCase = true)) {
-            "https://streaming-community.biz"
+            .getString(KEY_LAST_SC_DOMAIN, defaultDomain)
+            ?: defaultDomain
+        return if (saved.contains("google.com/search", ignoreCase = true) ||
+            saved.contains("streaming-community.biz", ignoreCase = true)
+        ) {
+            defaultDomain
         } else {
             saved
         }

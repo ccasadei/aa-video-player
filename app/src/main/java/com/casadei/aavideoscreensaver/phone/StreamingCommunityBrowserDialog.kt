@@ -268,7 +268,7 @@ object StreamingCommunityBrowserDialog {
                 super.onPageStarted(view, url, favicon)
                 urlBar.setText(url)
                 val lowerUrl = url.lowercase()
-                if (lowerUrl.contains("streamingcommunity.") || lowerUrl.contains("streaming-community.")) {
+                if (lowerUrl.contains("streamingcommunity") || lowerUrl.contains("streaming-community.")) {
                     val uri = Uri.parse(url)
                     val domainRoot = "${uri.scheme ?: "https"}://${uri.host}"
                     ScreensaverRepository.saveLastStreamingCommunityUrl(context, domainRoot)
@@ -404,7 +404,8 @@ object StreamingCommunityBrowserDialog {
         if (trimmed.contains(".") && !trimmed.contains(" ")) {
             return "https://$trimmed"
         }
-        return "https://streaming-community.biz/archivio/?search=${Uri.encode(trimmed)}"
+        val baseUrl = com.casadei.aavideoscreensaver.extractor.StreamingCommunityUrlResolver.getCachedOrDefaultBaseUrl()
+        return "$baseUrl/it/search?q=${Uri.encode(trimmed)}"
     }
 
     private fun createCompactButton(
